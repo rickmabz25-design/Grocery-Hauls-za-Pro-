@@ -7,6 +7,7 @@
 //   categories.json  -> { categories: Category[] }
 //   promos.json      -> { promos: PromoCard[] }   (default sort: discount)
 //   whats-new.json   -> { posts: FeedPost[] }
+//   products.json    -> { products: Product[] }   (for client-side search + compare)
 //
 // PromoCard = { id, productId, name, unit, category{id,name,icon}, storeId,
 //               storeName, storeColor, promoPrice, normalPrice, discount,
@@ -79,6 +80,35 @@ cards.sort(
   (a, b) => b.discount - a.discount || a.promoPrice - b.promoPrice
 )
 
+// --- Products (client-side search / compare / list enrichment) --------------
+// Mirrors the shape of a Product row as the /api/products route returns it,
+// plus `storePrices` (normal shelf price per store) so the static build can
+// compute basket comparisons entirely in the browser.
+const productRows = q(`SELECT * FROM Product WHERE active = 1 ORDER BY name ASC`)
+const priceRows = q(`SELECT * FROM StorePrice`)
+const products = []
+for (const p of productRows) {
+  const category = catById.get(p.categoryId)
+  if (!category) continue
+  const storePrices = {}
+  for (const pr of priceRows) {
+    if (pr.productId === p.id && storeById.has(pr.storeId)) {
+      const v = Number(pr.price)
+      if (Number.isFinite(v)) storePrices[pr.storeId] = Math.round(v * 100) / 100
+    }
+  }
+  products.push({
+    id: p.id,
+    name: p.name,
+    brand: p.brand ?? null,
+    unit: p.unit ?? null,
+    barcode: p.barcode ?? null,
+    categoryId: p.categoryId,
+    category: { id: category.id, name: category.name, icon: category.icon },
+    storePrices,
+  })
+}
+
 // --- What's New feed (same transform as /api/whats-new) --------------------
 const posts = q(
   `SELECT * FROM WhatsNewPost WHERE active = 1 ORDER BY datePosted DESC`
@@ -112,6 +142,7 @@ const feed = posts.map((post) => {
         productId: c.productId,
         name: c.name,
         unit: c.unit,
+        category: c.category ? { name: c.category.name } : null,
         storeName: c.storeName,
         storeColor: c.storeColor,
         promoPrice: c.promoPrice,
@@ -127,6 +158,7 @@ const files = {
   'categories.json': { categories },
   'promos.json': { promos: cards },
   'whats-new.json': { posts: feed },
+  'products.json': { products },
 }
 let bytes = 0
 for (const [name, payload] of Object.entries(files)) {
